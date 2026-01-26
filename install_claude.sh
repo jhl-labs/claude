@@ -1,66 +1,80 @@
 #!/bin/bash
 
-# Claude Code CLI 설치 스크립트 (Ubuntu/Linux용)
-# 공식 설치 방법: https://claude.ai/install.sh
+# Claude Code CLI 바이너리 다운로드 스크립트
+# Windows용 claude.exe와 Linux용 claude를 현재 디렉토리에 다운로드
 
 set -e
 
+GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+DOWNLOAD_DIR="$(pwd)"
+
 echo "======================================"
-echo "  Claude Code CLI 설치 스크립트"
+echo "  Claude Code 바이너리 다운로드"
 echo "======================================"
 echo ""
-
-# 시스템 요구사항 확인
-echo "[1/3] 시스템 요구사항 확인 중..."
-
-# Ubuntu 버전 확인
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    echo "  - OS: $NAME $VERSION_ID"
-else
-    echo "  - OS 정보를 확인할 수 없습니다."
-fi
+echo "다운로드 위치: $DOWNLOAD_DIR"
+echo ""
 
 # curl 설치 확인
 if ! command -v curl &> /dev/null; then
-    echo "  - curl이 설치되어 있지 않습니다. 설치 중..."
-    sudo apt-get update && sudo apt-get install -y curl
-else
-    echo "  - curl: 설치됨"
+    echo "오류: curl이 설치되어 있지 않습니다."
+    echo "설치: sudo apt-get install curl"
+    exit 1
 fi
 
-echo ""
-echo "[2/3] Claude Code CLI 설치 중..."
-echo "  - 공식 설치 스크립트 실행: https://claude.ai/install.sh"
-echo ""
+# 최신 버전 확인
+echo "[1/4] 최신 버전 확인 중..."
+VERSION=$(curl -fsSL "$GCS_BUCKET/latest")
+echo "  - 최신 버전: $VERSION"
 
-# 공식 설치 스크립트 실행
-curl -fsSL https://claude.ai/install.sh | bash
-
+# Linux 플랫폼 감지
 echo ""
-echo "[3/3] 설치 확인 중..."
+echo "[2/4] 플랫폼 감지 중..."
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  LINUX_ARCH="x64" ;;
+    aarch64) LINUX_ARCH="arm64" ;;
+    arm64)   LINUX_ARCH="arm64" ;;
+    *)       LINUX_ARCH="x64" ;;
+esac
+LINUX_PLATFORM="linux-$LINUX_ARCH"
+echo "  - Linux 플랫폼: $LINUX_PLATFORM"
+echo "  - Windows 플랫폼: win32-x64"
 
-# 설치 확인
-if command -v claude &> /dev/null; then
-    echo ""
-    echo "======================================"
-    echo "  설치 완료!"
-    echo "======================================"
-    echo ""
-    echo "Claude Code 버전:"
-    claude --version
-    echo ""
-    echo "사용법: claude"
-    echo "문제 진단: claude doctor"
-    echo ""
+# Linux용 claude 다운로드
+echo ""
+echo "[3/4] Linux용 claude 다운로드 중..."
+LINUX_URL="$GCS_BUCKET/$VERSION/$LINUX_PLATFORM/claude"
+echo "  - URL: $LINUX_URL"
+
+if curl -fsSL -o "$DOWNLOAD_DIR/claude" "$LINUX_URL"; then
+    chmod +x "$DOWNLOAD_DIR/claude"
+    echo "  - 완료: $DOWNLOAD_DIR/claude"
 else
-    echo ""
-    echo "======================================"
-    echo "  설치 후 셸을 재시작하세요"
-    echo "======================================"
-    echo ""
-    echo "다음 명령어를 실행하거나 터미널을 재시작하세요:"
-    echo "  source ~/.bashrc  (bash 사용 시)"
-    echo "  source ~/.zshrc   (zsh 사용 시)"
-    echo ""
+    echo "  - 실패: Linux용 claude 다운로드 오류"
 fi
+
+# Windows용 claude.exe 다운로드
+echo ""
+echo "[4/4] Windows용 claude.exe 다운로드 중..."
+WINDOWS_URL="$GCS_BUCKET/$VERSION/win32-x64/claude.exe"
+echo "  - URL: $WINDOWS_URL"
+
+if curl -fsSL -o "$DOWNLOAD_DIR/claude.exe" "$WINDOWS_URL"; then
+    echo "  - 완료: $DOWNLOAD_DIR/claude.exe"
+else
+    echo "  - 실패: Windows용 claude.exe 다운로드 오류"
+fi
+
+# 결과 확인
+echo ""
+echo "======================================"
+echo "  다운로드 완료!"
+echo "======================================"
+echo ""
+echo "다운로드된 파일:"
+ls -lh "$DOWNLOAD_DIR/claude" "$DOWNLOAD_DIR/claude.exe" 2>/dev/null || echo "일부 파일이 없습니다."
+echo ""
+echo "Linux에서 실행: ./claude"
+echo "Windows에서 실행: claude.exe"
+echo ""
