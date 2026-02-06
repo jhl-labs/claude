@@ -1,0 +1,179 @@
+name: Sync Claude CLI
+
+on:
+  schedule:
+    # 매일 00:00 UTC (한국시간 09:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '이미 존재하는 버전도 강제 릴리스'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  GCS_BUCKET: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest Claude version
+        id: version
+        run: |
+          VERSION=$(curl -fsSL "$GCS_BUCKET/latest")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Latest Claude version: $VERSION"
+
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FORCE="${{ github.event.inputs.force }}"
+
+          if gh release view "v$VERSION" &>/dev/null; then
+            echo "Release v$VERSION already exists"
+            if [ "$FORCE" = "true" ]; then
+              echo "Force mode enabled, deleting existing release..."
+              gh release delete "v$VERSION" --yes
+              git push --delete origin "v$VERSION" 2>/dev/null || true
+              echo "skip=false" >> $GITHUB_OUTPUT
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "New version detected: v$VERSION"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download manifest
+        if: steps.check.outputs.skip != 'true'
+        id: manifest
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          curl -fsSL "$GCS_BUCKET/$VERSION/manifest.json" -o manifest.json
+
+          # SHA256 추출
+          LINUX_SHA=$(jq -r '.["linux-x64"].sha256' manifest.json)
+          WINDOWS_SHA=$(jq -r '.["win32-x64"].sha256' manifest.json)
+
+          echo "linux_sha=$LINUX_SHA" >> $GITHUB_OUTPUT
+          echo "windows_sha=$WINDOWS_SHA" >> $GITHUB_OUTPUT
+          echo "Linux x64 SHA256: $LINUX_SHA"
+          echo "Windows x64 SHA256: $WINDOWS_SHA"
+
+      - name: Download Linux binary
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Downloading Linux x64 binary..."
+          curl -fsSL "$GCS_BUCKET/$VERSION/linux-x64/claude" -o claude
+          chmod +x claude
+          ls -lh claude
+
+      - name: Download Windows binary
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Downloading Windows x64 binary..."
+          curl -fsSL "$GCS_BUCKET/$VERSION/win32-x64/claude.exe" -o claude.exe
+          ls -lh claude.exe
+
+      - name: Verify SHA256 checksums
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          echo "Verifying checksums..."
+
+          # Linux
+          ACTUAL_LINUX=$(sha256sum claude | awk '{print $1}')
+          EXPECTED_LINUX="${{ steps.manifest.outputs.linux_sha }}"
+          if [ "$ACTUAL_LINUX" != "$EXPECTED_LINUX" ]; then
+            echo "ERROR: Linux binary checksum mismatch!"
+            echo "Expected: $EXPECTED_LINUX"
+            echo "Actual:   $ACTUAL_LINUX"
+            exit 1
+          fi
+          echo "Linux binary checksum OK"
+
+          # Windows
+          ACTUAL_WINDOWS=$(sha256sum claude.exe | awk '{print $1}')
+          EXPECTED_WINDOWS="${{ steps.manifest.outputs.windows_sha }}"
+          if [ "$ACTUAL_WINDOWS" != "$EXPECTED_WINDOWS" ]; then
+            echo "ERROR: Windows binary checksum mismatch!"
+            echo "Expected: $EXPECTED_WINDOWS"
+            echo "Actual:   $ACTUAL_WINDOWS"
+            exit 1
+          fi
+          echo "Windows binary checksum OK"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # 릴리스 노트 생성
+          cat > release_notes.md << 'EOF'
+          ## Claude Code CLI v$VERSION
+
+          Google Storage 접근이 제한된 환경을 위한 미러 릴리스입니다.
+
+          ### 다운로드
+
+          | 플랫폼 | 파일 | 설치 위치 |
+          |--------|------|-----------|
+          | Linux x64 | `claude` | `~/.local/bin/claude` |
+          | Windows x64 | `claude.exe` | `%USERPROFILE%\.claude\bin\claude.exe` |
+
+          ### Linux 설치 방법
+          ```bash
+          # 다운로드 후
+          chmod +x claude
+          mkdir -p ~/.local/bin
+          mv claude ~/.local/bin/
+
+          # PATH에 추가 (필요시)
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+          source ~/.bashrc
+          ```
+
+          ### Windows 설치 방법
+          ```powershell
+          # 다운로드 후
+          $installDir = "$env:USERPROFILE\.claude\bin"
+          New-Item -ItemType Directory -Force -Path $installDir
+          Move-Item claude.exe $installDir\
+
+          # PATH에 추가 (관리자 권한 필요)
+          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$installDir", "User")
+          ```
+
+          ### SHA256 체크섬
+          - `claude`: `${{ steps.manifest.outputs.linux_sha }}`
+          - `claude.exe`: `${{ steps.manifest.outputs.windows_sha }}`
+
+          ---
+          *이 릴리스는 [Anthropic Claude Code](https://github.com/anthropics/claude-code)의 공식 바이너리를 미러링한 것입니다.*
+          EOF
+
+          # 버전 변수 치환
+          sed -i "s/\$VERSION/$VERSION/g" release_notes.md
+
+          # Release 생성
+          gh release create "v$VERSION" \
+            --title "Claude Code v$VERSION" \
+            --notes-file release_notes.md \
+            claude \
+            claude.exe
+
+          echo "Release v$VERSION created successfully!"
