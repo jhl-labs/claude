@@ -63,8 +63,8 @@ jobs:
           curl -fsSL "$GCS_BUCKET/$VERSION/manifest.json" -o manifest.json
 
           # SHA256 추출
-          LINUX_SHA=$(jq -r '.["linux-x64"].sha256' manifest.json)
-          WINDOWS_SHA=$(jq -r '.["win32-x64"].sha256' manifest.json)
+          LINUX_SHA=$(jq -r '.platforms["linux-x64"].checksum' manifest.json)
+          WINDOWS_SHA=$(jq -r '.platforms["win32-x64"].checksum' manifest.json)
 
           echo "linux_sha=$LINUX_SHA" >> $GITHUB_OUTPUT
           echo "windows_sha=$WINDOWS_SHA" >> $GITHUB_OUTPUT
